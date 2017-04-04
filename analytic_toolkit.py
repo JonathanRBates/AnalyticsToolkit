@@ -33,27 +33,39 @@ def get_transformation_rules(vfile):
     
     """
     df = pd.read_excel(vfile)
-            
-    categorical_vars = list(df.loc[
-        (df['WHI_CV_important_Flag']==1) & 
-        (df['Variable Type (1= Binary 2=Categorical 3=continuous)']==2),
-        'Variable Name'].values)
     
-    binary_vars = list(df.loc[
-        (df['WHI_CV_important_Flag']==1) & 
-        (df['Variable Type (1= Binary 2=Categorical 3=continuous)']==1),
-        'Variable Name'].values)
+    # exclude outcomes, include everything else with important_flag
+#    inc = list(map(lambda x, y: 
+#        (x not in ['CV_outcomes','Stroke','DVT','Death'])
+#        & (y==1.), df['Data'], df['Model_variables']
+#        ))
+    
+    inc = df['Model_variables']==1.
+    cat = df['Variable Type (1= Binary 2=Categorical 3=continuous)']  
+    
+#    # variable mapping rule
+#      
+#    include_cols = df.loc[inc,'Variable Name'].tolist()          
+#    categorical_vars = df.loc[(inc)&(cat==2),'Variable Name'].tolist() 
+#    binary_vars = df.loc[(inc)&(cat==1),'Variable Name'].tolist()    
+#    continuous_vars = df.loc[(inc)&(cat==3),'Variable Name'].tolist() 
+    
+    def pname(r):
+        pre = r['WHI File'].split('_')[0]
+        b = r['Variable Name']
+        return pre+'_'+b
         
-    continuous_vars = list(df.loc[
-        (df['WHI_CV_important_Flag']==1) & 
-        (df['Variable Type (1= Binary 2=Categorical 3=continuous)']==3),
-        'Variable Name'].values)
-
+    # append prefix
+    include_cols = df[inc].apply(pname, axis=1).tolist()           
+    categorical_vars = df[inc &(cat==2)].apply(pname, axis=1).tolist()    
+    binary_vars = df[inc &(cat==1)].apply(pname, axis=1).tolist()   
+    continuous_vars = df[inc &(cat==3)].apply(pname, axis=1).tolist()   
+    
     transformation_rules = {'continuous_vars': continuous_vars, 
         'categorical_vars': categorical_vars,
         'binary_vars': binary_vars}
        
-    return transformation_rules
+    return include_cols, transformation_rules
 
 
 ##############################################################################
@@ -118,20 +130,15 @@ def preprocess_train_data(x, tr=None):
     
     if 'categorical_vars' in tr:
         # map_instructions.extend([([v], [MapToStr(), LabelBinarizer()]) for v in tr['categorical_vars']])
-        map_instructions.extend([([v], ToDummiesWrapper()) for v in tr['categorical_vars'] if v in x.columns])        
+        # TODO: REMOVED dummy_na coding to help elimate colinearity, but there must be a better way to do this...
+        map_instructions.extend([([v], ToDummiesWrapper(dummy_na=True)) for v in tr['categorical_vars'] if v in x.columns])        
         
     if 'binary_vars' in tr:
         map_instructions.extend([([v], [CatchAllNAN(), Imputer(strategy='most_frequent'), MinMaxScaler()]) for v in tr['binary_vars'] if v in x.columns])
     
     mapper = DataFrameMapper(map_instructions)
-
-    xt = mapper.fit_transform(x)    
-    
-    # TODO: interactions
-    # poly = PolynomialFeatures(degree=2, interaction_only=True, include_bias=False)
-    # X = poly.fit_transform(Xmain)    
-    # scale(X, axis=0, with_mean=standardize_with_mean, with_std=standardize_with_std, copy=False)    
-    
+    xt = mapper.fit_transform(x)      
+   
     # get column names
     column_names = list()
     for feature in mapper.features: 
@@ -165,14 +172,30 @@ def preprocess_test_data(x, mapper, column_names):
     if mapper is None:
         return x
     
-    return pd.DataFrame(mapper.transform(x), columns=column_names)    
+    return pd.DataFrame(mapper.transform(x), columns=column_names) 
+    
+    
+    
+def get_interactions(X, column_names, degree=2):   
+    """TODO: how does this fit into pipeline?
+    With scaling, should include per CV fold
+    
+    Include in preprocessing, so variables to interact can be specified in transformation rules.
+    """
+    from sklearn.preprocessing import PolynomialFeatures
+    from sklearn.preprocessing import scale
+    poly = PolynomialFeatures(degree=degree, interaction_only=True, include_bias=False)
+    X = poly.fit_transform(X)    
+    scale(X, axis=0, with_mean=False, with_std=False, copy=False) 
+    column_names = ['*'.join(np.array(column_names)[b==1]) for b in poly.powers_]   
     
     
 ##############################################################################
 # Cross Validation
 ##############################################################################
 
-def metamodels_cross_validate(X, y, transformation_rules=None, metamodels=None, kfolds=10, fname=None, verbose=False):
+# TODO: replace with scikit learn's CV module...
+def metamodels_cross_validate(X, y, transformation_rules=None, metamodels=None, kfolds=10, f_validate=None, verbose=False):
     """
     Run k-fold cross validation for metamodels; binary classifiers.
     
@@ -180,7 +203,7 @@ def metamodels_cross_validate(X, y, transformation_rules=None, metamodels=None, 
     :param pd.core.series.Series y: the training labels n,
     :param <list of metamodels> metamodels: [see below]
     :param int kfolds: number of folds for validation
-    :param str fname: the file name to pickle results
+    :param str f_validate: the file name to pickle results
     
     """
         
@@ -189,9 +212,6 @@ def metamodels_cross_validate(X, y, transformation_rules=None, metamodels=None, 
 
     from sklearn.metrics import roc_auc_score
     from collections import defaultdict
-    
-    fname = 'metamodels_cross_validate_results.data'
-    fname_handle = open(fname, 'wb')
     
     # make CV splits evenly wrt proportion of outcomes
     # TODO: add alternative CV method with boostrap resampling
@@ -224,6 +244,7 @@ def metamodels_cross_validate(X, y, transformation_rules=None, metamodels=None, 
                 # Fit Model 
                 clf = clf.fit(Xt, yt)   
                 # Assess Model
+                # TODO: have optimality criterion per metamodel
                 auc = roc_auc_score(yf, clf.predict_proba(Xf)[:,1])
                 results_[i].append({'fold':k,'auc':auc}) 
             #/Hyperparameter Search
@@ -233,10 +254,10 @@ def metamodels_cross_validate(X, y, transformation_rules=None, metamodels=None, 
         idx_best, hyp_best, results_best = summarize_cv_results(all_results[m['id']], verbose)
         print('Best:',hyp_best)
         print('     ',results_best)
-        pk.dump((all_results,metamodels,cv_splits,transformation_rules), fname_handle)  
-        # 
-        #  pk.dump((1,2,3), open('this.pkl', 'wb'))
-        #  a,b,c = pk.load(open('this.pkl', 'rb'))
+        # Save current results
+        f_validate_handle = open(f_validate, 'wb')
+        pk.dump((all_results,metamodels,cv_splits,transformation_rules), f_validate_handle)  
+        f_validate_handle.close()       
         
     return None          
   
@@ -244,7 +265,7 @@ def metamodels_cross_validate(X, y, transformation_rules=None, metamodels=None, 
 def summarize_cv_results(results, verbose=False):
     """
     results = all_results[m['id']]
-    """
+    """       
     results_summary = dict((i,{
                                 'auc_mean': np.mean([x['auc'] for x in kaucs]),
                                 'auc_std': np.std([x['auc'] for x in kaucs]),
@@ -260,29 +281,68 @@ def summarize_cv_results(results, verbose=False):
 
 
 ##############################################################################
-# Testing
+# Final Training
 ##############################################################################
 
-def summarize_test_results(X_train, y_train, X_test, y_test):
+def fit_optimal_model_to_training_data(X_train, y_train, X_test, y_test, f_validate=None, f_fit_models=None):
     """
+    e.g.
+    'metamodels_cross_validate_results.data'
+    'fit_models.data'
     """
     from sklearn.metrics import roc_auc_score
-    fname = open('metamodels_cross_validate_results.data', 'rb')
-    all_results,metamodels,cv_splits,transformation_rules = pk.load(fname)  
+    with open(f_validate, 'rb') as f:                                                                 
+        all_results, metamodels, cv_splits, transformation_rules = pk.load(f)  
     Xt, mapper, column_names = preprocess_train_data(X_train, transformation_rules)    
+    Xf = preprocess_test_data(X_test, mapper, column_names)
+    fit_models = dict()    
+    for m in metamodels: 
+        print('Testing', m['id'], '-'*20)
+        _, hyp_best, _ = summarize_cv_results(all_results[m['id']])
+        print('Hyperparameters:')        
+        for key, value in hyp_best.items() :
+            print('    {} : {}'.format(key, value))
+        clf = m['model'](**hyp_best)
+        # Fit Model 
+        clf = clf.fit(Xt, y_train) 
+        fit_models[m['id']] = clf
+        # Save Model        
+        f_fit_models_handle = open(f_fit_models, 'wb')
+        pk.dump((mapper, column_names, fit_models), f_fit_models_handle)
+        f_fit_models_handle.close()     
+        # Assess Model
+        auc = roc_auc_score(y_test, clf.predict_proba(Xf)[:,1])
+        print('>> AUC: {:5.3f}'.format(auc))
+    return None        
+
+##############################################################################
+# Testing
+##############################################################################   
+     
+def summarize_test_results(X_test, y_test, f_validate=None, f_fit_models=None):
+    """
+    e.g.
+    'metamodels_cross_validate_results.data'
+    'fit_models.data'
+    """
+    from sklearn.metrics import roc_auc_score
+    with open(f_validate, 'rb') as f:                                                                 
+        all_results, metamodels, cv_splits, transformation_rules = pk.load(f)  
+    with open(f_fit_models, 'rb') as f:
+        mapper, column_names, fit_models = pk.load(f) 
     Xf = preprocess_test_data(X_test, mapper, column_names)
     for m in metamodels: 
         print('Testing', m['id'], '-'*20)
         _, hyp_best, _ = summarize_cv_results(all_results[m['id']])
-        print('Hyperparameters:', hyp_best)
-        clf = m['model'](**hyp_best)
-        # Fit Model 
-        clf = clf.fit(Xt, y_train)   
+        print('Hyperparameters:')        
+        for key, value in hyp_best.items() :
+            print('    {} : {}'.format(key, value))
+        clf = fit_models[m['id']]
         # Assess Model
         auc = roc_auc_score(y_test, clf.predict_proba(Xf)[:,1])
-        print('auc: {:5.3f}'.format(auc))
-    return None        
-        
+        print('>> AUC: {:5.3f}'.format(auc))
+    return None       
+    
 ##############################################################################
 # Get Calibration
 ##############################################################################
@@ -362,23 +422,29 @@ from sklearn.base import BaseEstimator, TransformerMixin
 class ToDummiesWrapper(BaseEstimator, TransformerMixin):
     """
     cf. http://stackoverflow.com/questions/21057621/sklearn-labelencoder-with-never-seen-before-values
+    
+    1/27/2017 - modified to reduce colinearity by appending [1:] to columns
+    
     """
+    def __init__(self, dummy_na=False):
+        self.dummy_na = dummy_na  
+        
     def fit(self, X):     
         if isinstance(X, pd.core.series.Series):
-            self.classes_ = pd.get_dummies(X, dummy_na=True, prefix='', prefix_sep='').columns   
+            self.classes_ = pd.get_dummies(X, dummy_na=self.dummy_na, prefix='', prefix_sep='').columns[1:] 
             self.X_type = pd.core.series.Series
         elif isinstance(X, np.ndarray) and X.shape[1]==1:            
-            self.classes_ = pd.get_dummies(pd.Series(X.ravel()), dummy_na=True, prefix='', prefix_sep='').columns
+            self.classes_ = pd.get_dummies(pd.Series(X.ravel()), dummy_na=self.dummy_na, prefix='', prefix_sep='').columns[1:]
             self.X_type = np.ndarray
         else:
-            assert "Check type(X)", type(X)                        
+            assert "Check type(X)", type(X)                      
         return self
         
     def transform(self, X):        
         if self.X_type == pd.core.series.Series:            
             v = (
                  pd.get_dummies(X, 
-                                dummy_na=True, 
+                                dummy_na=self.dummy_na, 
                                 prefix='', 
                                 prefix_sep='')
                                 .reindex(columns=self.classes_, 
@@ -387,7 +453,7 @@ class ToDummiesWrapper(BaseEstimator, TransformerMixin):
         elif self.X_type == np.ndarray and X.shape[1]==1: 
             v = (
                  pd.get_dummies(pd.Series(X.ravel()), 
-                                dummy_na=True, 
+                                dummy_na=self.dummy_na, 
                                 prefix='', 
                                 prefix_sep='')
                                 .reindex(columns=self.classes_, 
