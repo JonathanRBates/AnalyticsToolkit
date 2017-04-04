@@ -1,12 +1,12 @@
 # AnalyticsToolkit
 Modules and scripts to help standardize and streamline analytic development, validation, and exploration.
 
-\s\s
-\s\s
+<br>
 
-/resources/AnalyticWorkflow.pdf
+https://github.com/JonathanRBates/AnalyticsToolkit/blob/master/resources/AnalyticWorkflow.pdf
 
-\s\s
-\s\s
+<br>
+<br>
+<br>
 
 ![AnalyticWorkflow](/resources/AnalyticWorkflow.png)
