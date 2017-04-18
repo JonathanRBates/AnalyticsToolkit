@@ -108,7 +108,6 @@ def preprocess_train_data(x, tr=None):
     from sklearn_pandas import DataFrameMapper
     
     # TODO: consider using feature union for this...
-    # TODO: should all nans be thrown out at an earlier stage of analysis?
     #
     
     map_instructions = list()
@@ -117,8 +116,6 @@ def preprocess_train_data(x, tr=None):
         map_instructions.extend([([v], [CatchAllNAN(), Imputer(strategy='mean'), StandardScaler()]) for v in tr['continuous_vars'] if v in x.columns])
     
     if 'categorical_vars' in tr:
-        # map_instructions.extend([([v], [MapToStr(), LabelBinarizer()]) for v in tr['categorical_vars']])
-        # TODO: REMOVED dummy_na coding to help elimate colinearity, but there must be a better way to do this...
         map_instructions.extend([([v], ToDummiesWrapper(dummy_na=True)) for v in tr['categorical_vars'] if v in x.columns])        
         
     if 'binary_vars' in tr:
@@ -154,8 +151,7 @@ def preprocess_test_data(x, mapper, column_names):
     :param list column_names:
     :return: the preprocessed dataframe 
     
-    """
-    
+    """    
     # If mapper is None, return the original data
     if mapper is None:
         return x
@@ -170,7 +166,7 @@ def get_interactions(X, column_names, degree=2):
     
     Include in preprocessing, so variables to interact can be specified in transformation rules.
     """
-    # TODO: how does this fit into pipeline?
+    # TODO: fit into pipeline
     from sklearn.preprocessing import PolynomialFeatures
     from sklearn.preprocessing import scale
     poly = PolynomialFeatures(degree=degree, interaction_only=True, include_bias=False)
@@ -183,7 +179,7 @@ def get_interactions(X, column_names, degree=2):
 # Cross Validation
 ##############################################################################
 
-# TODO: replace with scikit learn's CV module...
+# TODO: replace with scikit learn's CV module... ; cf. sklearn.model_selection.RandomizedSearchCV
 def metamodels_cross_validate(X, y, transformation_rules=None, metamodels=None, kfolds=10, f_validate=None, verbose=False):
     """
     Run k-fold cross validation for metamodels; binary classifiers.
@@ -204,7 +200,7 @@ def metamodels_cross_validate(X, y, transformation_rules=None, metamodels=None, 
     
     # make CV splits evenly wrt proportion of outcomes
     # TODO: add alternative CV method with boostrap resampling
-    #?? sys.version_info.major == 3
+    # TODO: how should data be shuffled?
     from sklearn.model_selection import StratifiedKFold
     skf = StratifiedKFold(n_splits=kfolds, random_state=1)
     cv_splits = list(skf.split(X, y))
@@ -228,7 +224,6 @@ def metamodels_cross_validate(X, y, transformation_rules=None, metamodels=None, 
             Xf = preprocess_test_data(Xf, mapper, column_names)
             for i in htable_:
                 print('.',end='')
-                # TODO: include options for when .fit is not method used
                 clf = m['model'](**htable_[i])
                 # Fit Model 
                 clf = clf.fit(Xt, yt)   
