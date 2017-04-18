@@ -18,48 +18,36 @@ import pickle as pk
 # Read Excel Worksheet
 ##############################################################################
 
-def get_transformation_rules(vfile):   
+def get_transformation_rules(f_codebook):   
     r"""
-    Read the feature transformation rules from the excel file specified by vfile.    
+    Read the feature transformation rules from the excel file specified by f_codebook.    
     
     :return: the transformation rule/code for preprocessing
     
     
     Example.
     
-    vfile = r'location\file_name.xlsx'
-    transformation_rules = get_transformation_rules(vfile)
+    f_codebook = r'location\file_name.xlsx'
+    transformation_rules = get_transformation_rules(f_codebook)
     print(transformation_rules)   
     
     """
-    df = pd.read_excel(vfile)
-    
-    # exclude outcomes, include everything else with important_flag
-#    inc = list(map(lambda x, y: 
-#        (x not in ['CV_outcomes','Stroke','DVT','Death'])
-#        & (y==1.), df['Data'], df['Model_variables']
-#        ))
-    
-    inc = df['Model_variables']==1.
-    cat = df['Variable Type (1= Binary 2=Categorical 3=continuous)']  
-    
-#    # variable mapping rule
-#      
-#    include_cols = df.loc[inc,'Variable Name'].tolist()          
-#    categorical_vars = df.loc[(inc)&(cat==2),'Variable Name'].tolist() 
-#    binary_vars = df.loc[(inc)&(cat==1),'Variable Name'].tolist()    
-#    continuous_vars = df.loc[(inc)&(cat==3),'Variable Name'].tolist() 
+    df = pd.read_excel(f_codebook)
+     
+    inc = df['Predictor']==1.
+    cat = df['Mapping (u=continuous, b=binary, g=categorical)']  
     
     def pname(r):
-        pre = r['WHI File'].split('_')[0]
+        pre = r['File'].split('.')[0]
         b = r['Variable Name']
-        return pre+'_'+b
+        # return pre+'_'+b    # <- use this when Variable Name is not unique
+        return b
         
     # append prefix
     include_cols = df[inc].apply(pname, axis=1).tolist()           
-    categorical_vars = df[inc &(cat==2)].apply(pname, axis=1).tolist()    
-    binary_vars = df[inc &(cat==1)].apply(pname, axis=1).tolist()   
-    continuous_vars = df[inc &(cat==3)].apply(pname, axis=1).tolist()   
+    categorical_vars = df[inc &(cat=='g')].apply(pname, axis=1).tolist()    
+    binary_vars = df[inc &(cat=='b')].apply(pname, axis=1).tolist()   
+    continuous_vars = df[inc &(cat=='u')].apply(pname, axis=1).tolist()   
     
     transformation_rules = {'continuous_vars': continuous_vars, 
         'categorical_vars': categorical_vars,
@@ -177,11 +165,12 @@ def preprocess_test_data(x, mapper, column_names):
     
     
 def get_interactions(X, column_names, degree=2):   
-    """TODO: how does this fit into pipeline?
+    """
     With scaling, should include per CV fold
     
     Include in preprocessing, so variables to interact can be specified in transformation rules.
     """
+    # TODO: how does this fit into pipeline?
     from sklearn.preprocessing import PolynomialFeatures
     from sklearn.preprocessing import scale
     poly = PolynomialFeatures(degree=degree, interaction_only=True, include_bias=False)
